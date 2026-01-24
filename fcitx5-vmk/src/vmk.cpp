@@ -21,6 +21,7 @@
 #include <fcitx-utils/charutils.h>
 #include <fcitx-utils/keysymgen.h>
 #include <fcitx-utils/utf8.h>
+#include <fcitx/candidatelist.h>
 
 #include <algorithm>
 #include <atomic>
@@ -71,6 +72,8 @@ std::atomic<int> Y1{0};
 std::string BASE_SOCKET_PATH ;
 std::string BASE_SOCKET_PATH_TEST;
 static const int MAX_SOCKET_ATTEMPTS = 10;
+// Global flag to signal mouse click for closing app mode menu
+static std::atomic<bool> g_mouse_clicked{false};
 
 std::atomic<int> is_deleting_{0};
 static std::string getLastUtf8Char(const std::string &str) ;
@@ -840,6 +843,8 @@ void mousePressResetThread() {
 
             if (age_ms < STALE_MS) {
                 Y.store(1, std::memory_order_relaxed);
+                // Also signal that mouse was clicked to close app mode menu
+                g_mouse_clicked.store(true, std::memory_order_relaxed);
             }
 
             unlink(mouse_flag_path.c_str());
@@ -971,6 +976,13 @@ config_.chromex11.setValue(!*config_.chromex11);
 uiManager.registerAction("vmk-chromex11", chromeX11Action_.get());
     reloadConfig();
     instance_->inputContextManager().registerProperty("VMKState", &factory_);
+
+    std::string configDir = StandardPath::global().userDirectory(StandardPath::Type::Config) + "/fcitx5/conf";
+    if (!std::filesystem::exists(configDir)) {
+        std::filesystem::create_directories(configDir);
+    }
+    appRulesPath_ = configDir + "/vmk-app-rules.conf";
+    loadAppRules();
 }
 
 void vmkEngine::reloadConfig() {
@@ -1017,7 +1029,35 @@ void vmkEngine::activate(const InputMethodEntry &entry, InputContextEvent &event
     updateGeminiAction(event.inputContext());
     auto &statusArea = event.inputContext()->statusArea();
     if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) instance_->inputContextManager().setPreeditEnabledByDefault(true);
-    reloadConfig(); updateModeAction(event.inputContext()); updateInputMethodAction(event.inputContext()); updateCharsetAction(event.inputContext());
+
+    // ibus-bamboo mode save/load
+    std::string appName = ic->program();
+    std::string targetMode;
+
+    if (!appRules_.empty() && appRules_.count(appName)) {
+        targetMode = appRules_[appName];
+    } else {
+        targetMode = config_.mode.value();
+    }
+
+    int newE;
+    if (targetMode == "vmk1") newE = 1;
+    else if (targetMode == "vmk2") newE = 2;
+    else if (targetMode == "vmkpre") newE = 3;
+    else if (targetMode == "vmk1hc") newE = 4;
+    else newE = 0;
+
+    reloadConfig();
+    updateModeAction(event.inputContext());
+    updateInputMethodAction(event.inputContext());
+    updateCharsetAction(event.inputContext());
+
+    E = newE;
+    modeAction_->setShortText(targetMode);
+
+    auto state = ic->propertyFor(&factory_);
+    state->reset();
+    
     statusArea.addAction(StatusGroup::InputMethod, modeAction_.get());
     statusArea.addAction(StatusGroup::InputMethod, inputMethodAction_.get());
     statusArea.addAction(StatusGroup::InputMethod, charsetAction_.get());
@@ -1026,6 +1066,82 @@ statusArea.addAction(StatusGroup::InputMethod, chromeX11Action_.get());
 }
 
 void vmkEngine::keyEvent(const InputMethodEntry &entry, KeyEvent &keyEvent) {
+    auto ic = keyEvent.inputContext();
+
+    // Check if mouse was clicked to close app mode menu
+    if (isSelectingAppMode_ && g_mouse_clicked.load(std::memory_order_relaxed)) {
+        closeAppModeMenu();
+        ic->inputPanel().reset();
+        ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+        auto state = ic->propertyFor(&factory_);
+        state->reset();
+    }
+
+    // logic when opening app mode menu
+    if (isSelectingAppMode_) {
+        if (keyEvent.isRelease()) return;
+
+        keyEvent.filterAndAccept();
+        std::string selectedMode = "";
+        bool selectionMade = false;
+
+        // map number key to mode
+        if (keyEvent.key().check(FcitxKey_1)) selectedMode = "vmk1";
+        else if (keyEvent.key().check(FcitxKey_2)) selectedMode = "vmk2";
+        else if (keyEvent.key().check(FcitxKey_3)) selectedMode = "vmkpre";
+        else if (keyEvent.key().check(FcitxKey_4)) selectedMode = "vmk1hc";
+        else if (keyEvent.key().check(FcitxKey_5)) selectedMode = "Off";
+        else if (keyEvent.key().check(FcitxKey_6)) {
+            if (appRules_.count(currentConfigureApp_)) {
+                appRules_.erase(currentConfigureApp_);
+                saveAppRules();
+            }
+            selectionMade = true;
+        } else if (keyEvent.key().check(FcitxKey_Escape)) {
+            selectionMade = true;
+        } else if (keyEvent.key().check(FcitxKey_7)) {
+            isSelectingAppMode_ = false;
+            ic->inputPanel().reset();
+            ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+            auto state = ic->propertyFor(&factory_);
+            state->reset();
+            ic->commitString("`");
+            return;
+        }
+
+        if (!selectedMode.empty()) {
+            appRules_[currentConfigureApp_] = selectedMode;
+            saveAppRules();
+
+            if (selectedMode == "Off") E = 0;
+            else if (selectedMode == "vmk1") E = 1;
+            else if (selectedMode == "vmk2") E = 2;
+            else if (selectedMode == "vmkpre") E = 3;
+            else if (selectedMode == "vmk1hc") E = 4;
+            
+            modeAction_->setShortText(selectedMode);
+            selectionMade = true;
+        }
+
+        if (selectionMade) {
+            isSelectingAppMode_ = false;
+            ic->inputPanel().reset();
+            ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+            auto state = ic->propertyFor(&factory_);
+            state->reset();
+        }
+        return;
+    }
+
+    // logic when typing `
+    if (!keyEvent.isRelease() && keyEvent.rawKey().check(FcitxKey_grave)) {
+        currentConfigureApp_ = ic->program();
+        if (currentConfigureApp_.empty()) currentConfigureApp_ = "unknown-app";
+
+        showAppModeMenu(ic);
+        keyEvent.filterAndAccept();
+        return;
+    }
     auto state = keyEvent.inputContext()->propertyFor(&factory_);
     state->keyEvent(keyEvent);
 }
@@ -1102,6 +1218,76 @@ chromeX11Action_->setShortText(*config_.chromex11 ? _("ChromeX11: Bật") : _("C
     if (ic) {
         chromeX11Action_->update(ic);
     }
+}
+
+void vmkEngine::loadAppRules() {
+    appRules_.clear();
+    std::ifstream file(appRulesPath_);
+    if (!file.is_open()) return;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        auto delimiterPos = line.find('=');
+        if (delimiterPos != std::string::npos) {
+            std::string app = line.substr(0, delimiterPos);
+            std::string mode = line.substr(delimiterPos + 1);
+            appRules_[app] = mode;
+        }
+    }
+    file.close();
+}
+
+void vmkEngine::saveAppRules() {
+    std::ofstream file(appRulesPath_, std::ios::trunc);
+    if (!file.is_open()) return;
+
+    file << "# VMK Per-App Configuration\n";
+    for (const auto &pair : appRules_) {
+        file << pair.first << "=" << pair.second << "\n";
+    }
+    file.close();
+}
+
+void vmkEngine::closeAppModeMenu() {
+    isSelectingAppMode_ = false;
+    g_mouse_clicked.store(false, std::memory_order_relaxed);
+}
+
+void vmkEngine::showAppModeMenu(InputContext *ic) {
+    isSelectingAppMode_ = true;
+  
+    auto candidateList = std::make_unique<CommonCandidateList>();
+
+    candidateList->setLayoutHint(CandidateLayoutHint::Vertical);
+    candidateList->setPageSize(7);
+
+    std::string currentAppRules = "";
+    if (appRules_.count(currentConfigureApp_)) {
+        currentAppRules = appRules_[currentConfigureApp_];
+    } else {
+        currentAppRules = config_.mode.value();
+    }
+
+    auto getLabel = [&](const std::string& modeName, const std::string& modeLabel) {
+        if (modeName == currentAppRules) {
+            return Text(modeLabel + " (Mặc định)");
+        } else {
+            return Text(modeLabel);
+        }
+    };
+    
+    candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel("vmk1", "1. Fake backspace by Uinput")));
+    candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel("vmk2", "2. Surrounding Text")));
+    candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel("vmkpre", "3. Preedit")));
+    candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel("vmk1hc", "4. VMK1HC")));
+    candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel("Off", "5. OFF - Tắt bộ gõ")));
+    candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text("6. Xóa thiết lập cho app")));
+    candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text("7. Tắt menu và gõ `")));
+
+    ic->inputPanel().reset();
+    ic->inputPanel().setCandidateList(std::move(candidateList));
+    ic->updateUserInterface(UserInterfaceComponent::InputPanel);
 }
 } 
 

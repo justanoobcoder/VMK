@@ -138,6 +138,11 @@ public:
 void updateGeminiAction(InputContext *ic); // <--- THÊM DÒNG NÀY VÀO DÒNG 138
 void updateChromeX11Action(InputContext *ic); // <--- THÊM DÒNG NÀY
     void populateConfig();
+    // ibus-bamboo mode save/load
+    void loadAppRules();
+    void saveAppRules();
+    void showAppModeMenu(InputContext *ic);
+    void closeAppModeMenu();
 
 private:
 bool freeMarkingValue_ = true;
@@ -168,6 +173,11 @@ std::unique_ptr<fcitx::SimpleAction> modeAction_;
     std::vector<ScopedConnection> connections_;
 std::unique_ptr<SimpleAction> chromeX11Action_; 
     CGoObject dictionary_;
+    // ibus-bamboo mode save/load
+    std::unordered_map<std::string, std::string> appRules_;
+    std::string appRulesPath_;
+    bool isSelectingAppMode_ = false;
+    std::string currentConfigureApp_;
 };
 
 class vmkFactory : public AddonFactory {
