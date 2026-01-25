@@ -47,9 +47,10 @@ all: build
 build:
 	@echo "$(BLUE)Đang compile Fcitx5 VMK Addon...$(NC)"
 	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && cmake -DCMAKE_INSTALL_PREFIX=$(PREFIX) \
+	@cd $(BUILD_DIR) && \
+		export LDFLAGS="$(LDFLAGS)" && \
+		cmake -DCMAKE_INSTALL_PREFIX=$(PREFIX) \
 		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_SHARED_LINKER_FLAGS="-Wl,-z,relro -Wl,-z,now" \
 		-DFCITX_INSTALL_PKGDATADIR=$(FCITX5_DATADIR) \
 		..
 	@$(MAKE) -C $(BUILD_DIR)
