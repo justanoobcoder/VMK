@@ -42,23 +42,37 @@ Cải thiện trải nghiệm người dùng để tiện lợi hơn khi làm vi
 
 ## 📦 Cài đặt
 
-### Arch Linux / Manjaro / EndeavourOS
+### Arch Linux / Manjaro / EndeavourOS (AUR)
 
-Gói `fcitx5-vmk-git` sẽ tự động tải mã nguồn mới nhất và biên dịch (Build from source). Quá trình build rất nhanh (chỉ vài giây) do mã nguồn cực nhẹ.
+Hiện tại AUR đã có đầy đủ 3 gói cài đặt:
+
+| Gói              | Mô tả                      |
+| ---------------- | -------------------------- |
+| `fcitx5-vmk`     | Build từ tag release       |
+| `fcitx5-vmk-bin` | Prebuilt binary            |
+| `fcitx5-vmk-git` | Build theo commit mới nhất |
 
 ```bash
 # Sử dụng yay
+yay -S fcitx5-vmk
+yay -S fcitx5-vmk-bin
 yay -S fcitx5-vmk-git
 
 # Hoặc sử dụng paru
+paru -S fcitx5-vmk
+paru -S fcitx5-vmk-bin
 paru -S fcitx5-vmk-git
 ```
 
-### Các Distro khác (Ubuntu/Fedora/Debian)
+### Các Distro khác (Ubuntu/Fedora/Debian/openSUSE)
 
-Hiện tại, bạn có thể cài đặt bằng cách biên dịch từ mã nguồn sử dụng Makefile:
+Hiện tại chưa có các file package để quản lý dễ dàng bằng package manager trên các distro này. Chúng tôi đang lên kế hoạch phát hành các package chính thức trong tương lai.
 
-#### Yêu cầu hệ thống
+Bạn có thể cài đặt bằng 2 cách sau:
+
+#### Cách 1: Biên dịch từ mã nguồn (Build from source)
+
+##### Yêu cầu hệ thống
 
 ```bash
 # Ubuntu/Debian
@@ -71,7 +85,7 @@ sudo dnf install cmake extra-cmake-modules fcitx5-devel libinput-devel libudev-d
 sudo zypper install cmake extra-cmake-modules fcitx5-devel libinput-devel systemd-devel gcc-c++ go hicolor-icon-theme
 ```
 
-#### Biên dịch và cài đặt
+##### Biên dịch và cài đặt
 
 ```bash
 # Clone repository
@@ -88,7 +102,7 @@ sudo make install
 sudo make install PREFIX=/usr/local
 ```
 
-#### Gỡ cài đặt
+##### Gỡ cài đặt
 
 ```bash
 # Gỡ cài đặt
@@ -98,16 +112,42 @@ sudo make uninstall
 sudo make uninstall PREFIX=/usr/local
 ```
 
+#### Cách 2: Sử dụng bản Prebuilt (Không cần build)
+
+Để tiết kiệm thời gian biên dịch, bạn có thể tải và giải nén bản prebuilt trực tiếp:
+
+```bash
+# 1. Cài đặt các dependencies
+# Ubuntu/Debian
+sudo apt-get install fcitx5 libinput libudev hicolor-icon-theme
+
+# Fedora/RHEL
+sudo dnf install fcitx5 libinput systemd-libs hicolor-icon-theme
+
+# openSUSE
+sudo zypper install fcitx5 libinput systemd hicolor-icon-theme
+
+# 2. Tải bản prebuilt (từ Releases trên GitHub)
+wget https://github.com/nhktmdzhg/VMK/releases/download/v0.9.3-alpha/fcitx5-vmk-v0.9.3-alpha.tar.gz
+
+# 3. Giải nén vào thư mục gốc / (cần quyền root)
+sudo tar -xzf fcitx5-vmk-v0.9.3-alpha.tar.gz -C /
+
+# 4. Khởi động lại fcitx5 hoặc đăng xuất và đăng nhập lại
+fcitx5-remote -r
+# hoặc
+pkill fcitx5 && fcitx5 -d
+```
+
 ### 🎯 Các Package trong tương lai
 
 Chúng tôi đang lên kế hoạch phát hành các package chính thức cho các distro sau:
 
-| Distro        | Trạng thái      | Gói            |
-| ------------- | --------------- | -------------- |
-| Ubuntu/Debian | Đang phát triển | `.deb`         |
-| Fedora/RHEL   | Đang phát triển | `.rpm`         |
-| openSUSE      | Đang phát triển | `.rpm`         |
-| NixOS         | Đang phát triển | Nix expression |
+| Distro        | Trạng thái      | Gói    |
+| ------------- | --------------- | ------ |
+| Ubuntu/Debian | Đang phát triển | `.deb` |
+| Fedora/RHEL   | Đang phát triển | `.rpm` |
+| openSUSE      | Đang phát triển | `.rpm` |
 
 Nếu bạn muốn đóng góp vào việc đóng gói cho distro của mình, vui lòng mở một Pull Request hoặc Issue.
 
@@ -123,7 +163,7 @@ Khi đang ở trong bất kỳ ứng dụng nào, nhấn phím:
 ` (Phím dấu huyền)
 ```
 
-Menu sẽ hiện ra cho phép bạn chọn số từ 1-7:
+Menu sẽ hiện ra cho phép bạn chọn số từ 1-6 và `` ` ``:
 
 - **Mode 1 (Uinput):** Chế độ mặc định, tương thích tốt nhất (dùng server gửi phím xóa).
 - **Mode 2 (Surrounding Text):** Dùng cơ chế xóa ký tự của ứng dụng (Tương tự Unikey).
@@ -157,4 +197,7 @@ Chân thành cảm ơn tác giả đã đặt nền móng cho một bộ gõ ti�
 
 - **GitHub Repository:** https://github.com/nhktmdzhg/VMK
 - **Báo lỗi:** https://github.com/nhktmdzhg/VMK/issues
-- **AUR Package:** https://aur.archlinux.org/packages/fcitx5-vmk-git
+- **AUR Packages:**
+  - [`fcitx5-vmk`](https://aur.archlinux.org/packages/fcitx5-vmk)
+  - [`fcitx5-vmk-bin`](https://aur.archlinux.org/packages/fcitx5-vmk-bin)
+  - [`fcitx5-vmk-git`](https://aur.archlinux.org/packages/fcitx5-vmk-git)
