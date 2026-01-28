@@ -203,7 +203,7 @@ ibus exit
 
 ### 3. Thiết lập biến môi trường
 
-Export các biến môi trường sau vào file cấu hình shell của bạn (`~/.bashrc`, `~/.zshrc`, hoặc `~/.profile`):
+Export các biến môi trường sau vào file cấu hình shell của bạn (`~/.bash_profile`, `~/.zprofile`, hoặc `~/.profile`):
 
 ```bash
 # Thêm vào ~/.bash_profile, ~/.zprofile, hoặc ~/.profile
