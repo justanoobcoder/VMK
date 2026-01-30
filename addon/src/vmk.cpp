@@ -65,6 +65,7 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <limits.h>
 #endif
 
 int E=1;
@@ -272,9 +273,9 @@ public:
         return false;
     }
 
-    bool send_command_to_server(const std::string& command) {
+    bool send_command_to_server(int count) {
         if (uinput_client_fd_ >= 0) {
-            if (send(uinput_client_fd_, command.c_str(), command.length(), 0) >= 0) return true;
+            if (send(uinput_client_fd_, &count, sizeof(count), 0) >= 0) return true;
         }
         if (uinput_client_fd_ >= 0) {
             close(uinput_client_fd_);
@@ -282,7 +283,7 @@ public:
             uinput_fd_ = -1;
         }
         if (!connect_uinput_server()) return false;
-        if (send(uinput_client_fd_, command.c_str(), command.length(), 0) < 0) {
+        if (send(uinput_client_fd_, &count, sizeof(count), 0) < 0) {
             close(uinput_client_fd_);
             uinput_client_fd_ = -1;
             uinput_fd_ = -1;
@@ -306,8 +307,7 @@ public:
     void send_backspace_uinput(int count) {
         if (uinput_fd_ < 0 && !connect_uinput_server()) return;
         if (count > MAX_BACKSPACE_COUNT) count = MAX_BACKSPACE_COUNT;
-        std::string command = "BACKSPACE_" + std::to_string(count);
-        send_command_to_server(command);
+        send_command_to_server(count);
     }
 
     bool handleUInputKeyPress(fcitx::KeyEvent &event, fcitx::KeySym currentSym) {
@@ -854,21 +854,18 @@ void mousePressResetThread() {
                 // Check app name
                 struct ucred cred;
                 socklen_t len = sizeof(struct ucred);
-                char comm[64] = {0};
+                char exe_path[PATH_MAX] = {0};
                 if (getsockopt(sock, SOL_SOCKET, SO_PEERCRED, &cred, &len) ==
                     0) {
                     char path[64];
-                    snprintf(path, sizeof(path), "/proc/%d/comm", cred.pid);
-                    FILE *fp = fopen(path, "r");
-                    if (fp) {
-                        if (fgets(comm, sizeof(comm), fp)) {
-                            comm[strcspn(comm, "\n")] = 0;
-                        }
-                        fclose(fp);
+                    snprintf(path, sizeof(path), "/proc/%d/exe", cred.pid);
+                    ssize_t ret = readlink(path, exe_path, sizeof(exe_path) - 1);
+                    if (ret != -1) {
+                        exe_path[ret] = '\0';
                     }
                 }
 
-                if (n > 0 && std::string(comm) == "fcitx5-vmk-serv") {
+                if (n > 0 && std::string(exe_path) == "/usr/bin/fcitx5-vmk-server") {
                     Y.store(1, std::memory_order_relaxed);
                     // Also signal that mouse was clicked to close app mode menu
                     g_mouse_clicked.store(true, std::memory_order_relaxed);

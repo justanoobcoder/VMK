@@ -6,8 +6,8 @@ After=multi-user.target udev.target
 User=uinput_proxy
 Group=input
 
-CapabilityBoundingSet=CAP_SYS_NICE CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_SYS_NICE CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_SYS_NICE CAP_SYS_PTRACE
+AmbientCapabilities=CAP_SYS_NICE CAP_SYS_PTRACE
 ProtectProc=default
 ProcSubset=all
 
