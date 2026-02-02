@@ -384,8 +384,8 @@ namespace fcitx {
 
             auto                baseList   = ic_->inputPanel().candidateList();
             auto                commonList = std::dynamic_pointer_cast<CommonCandidateList>(baseList);
-            if (commonList && keyEvent.key().digit() >= 1 && keyEvent.key().digit() <= 9) {
-                int offset      = keyEvent.key().digit() - 1;
+            if (commonList && currentSym >= FcitxKey_1 && currentSym <= FcitxKey_9) {
+                int offset      = currentSym - FcitxKey_1;
                 int globalIndex = commonList->currentPage() * commonList->pageSize() + offset;
 
                 if (globalIndex < (int)commonList->totalSize()) {
