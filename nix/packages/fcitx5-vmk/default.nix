@@ -60,15 +60,19 @@ stdenv.mkDerivation rec {
 
   # change checking exe_path logic to make it work on NixOS since executable files on NixOS are not located in /usr/bin
   postPatch = ''
+    substituteInPlace src/vmk.cpp \
+      --replace-fail 'std::string(exe_path) == "/usr/bin/fcitx5-vmk-server"' \
+                '({ std::string p(exe_path); p.find("/nix/store/") == 0 && p.size() >= 22 && p.compare(p.size() - 22, 22, "/bin/fcitx5-vmk-server") == 0; })'
+
     substituteInPlace server/vmk-server.cpp \
-      --replace 'std::string(exe_path) == "/usr/bin/fcitx5"' \
+      --replace-fail 'std::string(exe_path) == "/usr/bin/fcitx5"' \
                 '({ std::string p(exe_path); p.find("/nix/store/") == 0 && p.size() >= 11 && p.compare(p.size() - 11, 11, "/bin/fcitx5") == 0; })'
   '';
 
   postInstall = ''
     if [ -d "$out/lib/systemd/system" ]; then
       substituteInPlace $out/lib/systemd/system/fcitx5-vmk-server@.service \
-        --replace "/usr/bin/fcitx5-vmk-server" "$out/bin/fcitx5-vmk-server"
+        --replace-fail "/usr/bin/fcitx5-vmk-server" "$out/bin/fcitx5-vmk-server"
     fi
   '';
 
