@@ -63,7 +63,7 @@
 #include <mutex>
 #endif
 
-fcitx::VMKMode    realMode = fcitx::VMKMode::VMK1;
+fcitx::VMKMode    realMode = fcitx::VMKMode::VMKSmooth;
 std::atomic<bool> needEngineReset{false};
 std::string       BASE_SOCKET_PATH;
 // Global flag to signal mouse click for closing app mode menu
@@ -78,7 +78,6 @@ std::atomic<bool>        stop_flag_monitor{false};
 std::atomic<bool>        monitor_running{false};
 int                      uinput_fd_        = -1;
 int                      uinput_client_fd_ = -1;
-int                      extraBackspace    = 0;
 
 std::string              buildSocketPath(const char* base_path_suffix) {
     const char* username_c = std::getenv("USER");
@@ -164,16 +163,16 @@ namespace fcitx {
             return result;
         }
 
-        static void DeletePreviousNChars(fcitx::InputContext* ic, size_t n, fcitx::Instance* instance) {
+        static void DeletePreviousNChars(InputContext* ic, size_t n, Instance* instance) {
             if (!ic || !instance || n == 0)
                 return;
-            if (ic->capabilityFlags().test(fcitx::CapabilityFlag::SurroundingText)) {
+            if (ic->capabilityFlags().test(CapabilityFlag::SurroundingText)) {
                 int offset = -static_cast<int>(n);
                 ic->deleteSurroundingText(offset, static_cast<int>(n));
                 return;
             }
             for (size_t i = 0; i < n; ++i) {
-                fcitx::Key key(FcitxKey_BackSpace);
+                Key key(FcitxKey_BackSpace);
                 ic->forwardKey(key, false);
                 ic->forwardKey(key, true);
             }
@@ -193,7 +192,7 @@ namespace fcitx {
 
         void setEngine() {
             vmkEngine_.reset();
-            realMode = fcitx::modeStringToEnum(engine_->config().mode.value());
+            realMode = modeStringToEnum(engine_->config().mode.value());
 
             if (engine_->config().inputMethod.value() == "Custom") {
                 std::vector<char*> charArray;
@@ -287,47 +286,21 @@ namespace fcitx {
             send_command_to_server(count);
         }
 
-        bool handleUInputKeyPress(fcitx::KeyEvent& event, fcitx::KeySym currentSym) {
-            if (!is_deleting_.load())
-                return false;
-            if (isBackspace(currentSym)) {
-                current_backspace_count_ += 1;
-                if (current_backspace_count_ < expected_backspaces_) {
-                    return false;
-                } else {
-                    is_deleting_.store(false);
-                    current_thread_id_.fetch_add(1);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                    ic_->commitString(pending_commit_string_);
-                    expected_backspaces_     = 0;
-                    current_backspace_count_ = -1;
-                    pending_commit_string_   = "";
-
-                    event.filterAndAccept();
-                    return true;
-                }
-            }
-            return false;
-        }
-
         void replayBufferToEngine(const std::string& buffer) {
             if (!vmkEngine_.handle())
                 return;
 
             ResetEngine(vmkEngine_.handle());
-            for (size_t i = 0; i < buffer.length();) {
-                if (i + 2 < buffer.length() && buffer.substr(i, 3) == "\\b\\") {
+            for (char raw_char : buffer) {
+                if (raw_char == 0x07) {
                     EngineProcessKeyEvent(vmkEngine_.handle(), FcitxKey_BackSpace, 0);
-                    i += 3;
                 } else {
-                    unsigned char c = static_cast<unsigned char>(buffer[i]);
-                    EngineProcessKeyEvent(vmkEngine_.handle(), (uint32_t)c, 0);
-                    i += 1;
+                    EngineProcessKeyEvent(vmkEngine_.handle(), (uint32_t)raw_char, 0);
                 }
             }
         }
 
-        bool isAutofillCertain(const fcitx::SurroundingText& s) {
+        bool isAutofillCertain(const SurroundingText& s) {
             if (!s.isValid() || oldPreBuffer_.empty()) {
                 return false;
             }
@@ -376,16 +349,15 @@ namespace fcitx {
 
         // Helper function for emoji mode
         void handleEmojiMode(KeyEvent& keyEvent) {
-            uint32_t modifierMask = static_cast<uint32_t>(KeyState::Ctrl) | static_cast<uint32_t>(KeyState::Alt) | static_cast<uint32_t>(KeyState::Super);
-            if (static_cast<uint32_t>(keyEvent.key().states()) & modifierMask) {
+            if (keyEvent.key().hasModifier()) {
                 keyEvent.forward();
                 return;
             }
 
-            const fcitx::KeySym currentSym = keyEvent.rawKey().sym();
+            const KeySym currentSym = keyEvent.rawKey().sym();
 
-            auto                baseList   = ic_->inputPanel().candidateList();
-            auto                commonList = std::dynamic_pointer_cast<CommonCandidateList>(baseList);
+            auto         baseList   = ic_->inputPanel().candidateList();
+            auto         commonList = std::dynamic_pointer_cast<CommonCandidateList>(baseList);
             if (commonList && currentSym >= FcitxKey_1 && currentSym <= FcitxKey_9) {
                 int offset      = currentSym - FcitxKey_1;
                 int globalIndex = commonList->currentPage() * commonList->pageSize() + offset;
@@ -406,43 +378,58 @@ namespace fcitx {
 
                 bool handled = false;
 
-                if (currentSym == FcitxKey_Tab || currentSym == FcitxKey_Down) {
-                    if (globalCursorIndex == totalSize - 1) {
-                        commonList->setGlobalCursorIndex(globalCursorIndex);
-                    } else if (localCursorIndex < pageSize - 1) {
-                        commonList->setGlobalCursorIndex(globalCursorIndex + 1);
-                    } else {
-                        commonList->next();
-                        int newPage = commonList->currentPage();
-                        commonList->setGlobalCursorIndex(newPage * pageSize);
-                    }
-                    handled = true;
-                } else if (currentSym == FcitxKey_ISO_Left_Tab || currentSym == FcitxKey_Up) {
-                    if (globalCursorIndex == 0) {
-                        commonList->setGlobalCursorIndex(globalCursorIndex);
-                    } else if (localCursorIndex > 0) {
-                        commonList->setGlobalCursorIndex(globalCursorIndex - 1);
-                    } else {
-                        commonList->prev();
-                        int newPage  = commonList->currentPage();
-                        int newIndex = newPage * pageSize + pageSize - 1;
-                        commonList->setGlobalCursorIndex(newIndex);
-                    }
-                    handled = true;
-                } else if (currentSym == FcitxKey_Page_Down || currentSym == FcitxKey_Right) {
-                    if (commonList->hasNext()) {
-                        commonList->next();
-                        int newPage = commonList->currentPage();
-                        commonList->setGlobalCursorIndex(newPage * pageSize);
+                switch (currentSym) {
+                    case FcitxKey_Tab:
+                    case FcitxKey_Down: {
+                        if (globalCursorIndex == totalSize - 1) {
+                            commonList->setGlobalCursorIndex(globalCursorIndex);
+                        } else if (localCursorIndex < pageSize - 1) {
+                            commonList->setGlobalCursorIndex(globalCursorIndex + 1);
+                        } else {
+                            commonList->next();
+                            int newPage = commonList->currentPage();
+                            commonList->setGlobalCursorIndex(newPage * pageSize);
+                        }
                         handled = true;
+                        break;
                     }
-                } else if (currentSym == FcitxKey_Page_Up || currentSym == FcitxKey_Left) {
-                    if (commonList->hasPrev()) {
-                        commonList->prev();
-                        int newPage = commonList->currentPage();
-                        commonList->setGlobalCursorIndex(newPage * pageSize);
+
+                    case FcitxKey_ISO_Left_Tab:
+                    case FcitxKey_Up: {
+                        if (globalCursorIndex == 0) {
+                            commonList->setGlobalCursorIndex(globalCursorIndex);
+                        } else if (localCursorIndex > 0) {
+                            commonList->setGlobalCursorIndex(globalCursorIndex - 1);
+                        } else {
+                            commonList->prev();
+                            int newPage  = commonList->currentPage();
+                            int newIndex = newPage * pageSize + pageSize - 1;
+                            commonList->setGlobalCursorIndex(newIndex);
+                        }
                         handled = true;
+                        break;
                     }
+                    case FcitxKey_Page_Down:
+                    case FcitxKey_Right: {
+                        if (commonList->hasNext()) {
+                            commonList->next();
+                            int newPage = commonList->currentPage();
+                            commonList->setGlobalCursorIndex(newPage * pageSize);
+                            handled = true;
+                        }
+                        break;
+                    }
+                    case FcitxKey_Page_Up:
+                    case FcitxKey_Left: {
+                        if (commonList->hasPrev()) {
+                            commonList->prev();
+                            int newPage = commonList->currentPage();
+                            commonList->setGlobalCursorIndex(newPage * pageSize);
+                            handled = true;
+                        }
+                        break;
+                    }
+                    default: break;
                 }
 
                 if (handled) {
@@ -466,36 +453,39 @@ namespace fcitx {
                 return;
             }
 
-            if (currentSym == FcitxKey_space || currentSym == FcitxKey_Return) {
-                if (commonList && !commonList->empty()) {
-                    int globalIdx = commonList->globalCursorIndex();
+            switch (currentSym) {
+                case FcitxKey_space:
+                case FcitxKey_Return: {
+                    if (commonList && !commonList->empty()) {
+                        int globalIdx = commonList->globalCursorIndex();
+                        commonList->candidateFromAll(globalIdx).select(ic_);
+                        keyEvent.filterAndAccept();
+                    } else if (currentSym == FcitxKey_Return && !emojiBuffer_.empty()) {
+                        ic_->commitString(emojiBuffer_);
+                        emojiBuffer_.clear();
+                        ic_->inputPanel().reset();
+                        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+                        keyEvent.filterAndAccept();
+                    } else {
+                        keyEvent.forward();
+                    }
+                    return;
+                }
 
-                    commonList->candidateFromAll(globalIdx).select(ic_);
-
-                    keyEvent.filterAndAccept();
-                } else if (currentSym == FcitxKey_Return && !emojiBuffer_.empty()) {
-                    ic_->commitString(emojiBuffer_);
+                case FcitxKey_Escape: {
                     emojiBuffer_.clear();
+                    emojiCandidates_.clear();
                     ic_->inputPanel().reset();
                     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
                     keyEvent.filterAndAccept();
-                } else {
-                    keyEvent.forward();
+                    return;
                 }
-                return;
+
+                default: break;
             }
 
-            if (currentSym == FcitxKey_Escape) {
-                emojiBuffer_.clear();
-                emojiCandidates_.clear();
-                ic_->inputPanel().reset();
-                ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-                keyEvent.filterAndAccept();
-                return;
-            }
-
-            if (currentSym >= 32 && currentSym <= 126) {
-                emojiBuffer_ += static_cast<char>(currentSym);
+            if (!Key::keySymToUTF8(currentSym).empty()) {
+                emojiBuffer_ += Key::keySymToUTF8(currentSym);
                 keyEvent.filterAndAccept();
                 updateEmojiPreedit();
             } else {
@@ -539,7 +529,7 @@ namespace fcitx {
                 candidateList->setLayoutHint(CandidateLayoutHint::Vertical);
                 candidateList->setPageSize(9);
 
-                for (int i = 0; i < emojiCandidates_.size(); ++i) {
+                for (size_t i = 0; i < emojiCandidates_.size(); ++i) {
                     int  localIndex = i % 9 + 1;
                     Text displayLabel(std::to_string(localIndex) + ": " + emojiCandidates_[i].trigger + " " + emojiCandidates_[i].output);
                     candidateList->append(std::make_unique<EmojiCandidateWord>(displayLabel, this, emojiCandidates_[i].output));
@@ -555,42 +545,74 @@ namespace fcitx {
             ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
         }
 
+        bool handleUInputKeyPress(KeyEvent& event, KeySym currentSym, int sleepTime) {
+            if (!is_deleting_.load()) {
+                return false;
+            }
+            if (isBackspace(currentSym)) {
+                current_backspace_count_ += 1;
+                if (current_backspace_count_ < expected_backspaces_) {
+                    return false;
+                } else {
+                    is_deleting_.store(false);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));
+                    ic_->commitString(pending_commit_string_);
+                    expected_backspaces_     = 0;
+                    current_backspace_count_ = -1;
+                    pending_commit_string_   = "";
+
+                    event.filterAndAccept();
+                    return true;
+                }
+            }
+            return false;
+        }
+
         void performReplacement(const std::string& deletedPart, const std::string& addedPart) {
+            int my_id                = ++current_thread_id_;
             current_backspace_count_ = 0;
             pending_commit_string_   = addedPart;
+
+            int extraBackspace = 0;
 
             if (isAutofillCertain(ic_->surroundingText()))
                 extraBackspace = 1;
             else
                 extraBackspace = 0;
 
-            expected_backspaces_ = fcitx::utf8::length(deletedPart) + 1 + extraBackspace;
+            expected_backspaces_ = utf8::length(deletedPart) + 1 + extraBackspace;
 
             if (expected_backspaces_ > 0) {
-                is_deleting_.store(true);
+                is_deleting_.store(true, std::memory_order_release);
                 send_backspace_uinput(expected_backspaces_);
 
-                int my_id = ++current_thread_id_;
                 std::thread([this, my_id]() {
                     auto start = std::chrono::steady_clock::now();
-                    while (is_deleting_.load()) {
-                        if (current_thread_id_.load() != my_id)
+
+                    while (true) {
+                        if (current_thread_id_.load(std::memory_order_acquire) != my_id) {
                             return;
-                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                        }
+
+                        if (!is_deleting_.load(std::memory_order_acquire)) {
+                            return;
+                        }
+
                         auto now = std::chrono::steady_clock::now();
-                        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() > 200)
+                        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() > 200) {
                             break;
+                        }
+
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
                     }
-                    if (current_thread_id_.load() == my_id) {
+                    if (current_thread_id_.load(std::memory_order_acquire) == my_id) {
+                        is_deleting_.store(false, std::memory_order_release);
                         if (!pending_commit_string_.empty()) {
                             ic_->commitString(pending_commit_string_);
                             pending_commit_string_ = "";
                         }
-                        is_deleting_.store(false);
                     }
                 }).detach();
-
-                extraBackspace = 0;
             } else {
                 if (!addedPart.empty()) {
                     ic_->commitString(addedPart);
@@ -598,121 +620,154 @@ namespace fcitx {
             }
         }
 
-        // Helper function for vmk1/vmk1hc mode
-        void handleUinputMode(KeyEvent& keyEvent, fcitx::KeySym currentSym, bool checkEmptyPreedit) {
-            if (!is_deleting_.load()) {
-                if (isBackspace(currentSym) || currentSym == FcitxKey_Return) {
-                    if (isBackspace(currentSym)) {
-                        history_ += "\\b\\";
-                        replayBufferToEngine(history_);
-                        UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
-                        oldPreBuffer_ = (preeditC && preeditC.get()[0]) ? preeditC.get() : "";
-                    } else {
-                        history_.clear();
-                        ResetEngine(vmkEngine_.handle());
-                        oldPreBuffer_.clear();
-                    }
-                    keyEvent.forward();
-                    return;
-                }
-            } else {
-                if (isBackspace(currentSym) && is_deleting_) {
-                    if (handleUInputKeyPress(keyEvent, currentSym))
+        // Helper function for vmk1/vmk1hc/vmksmooth mode
+        void handleUinputMode(KeyEvent& keyEvent, KeySym currentSym, bool checkEmptyPreedit, int sleepTime) {
+            if (keyEvent.key().isCursorMove() || keyEvent.key().hasModifier() || currentSym == FcitxKey_Tab || currentSym == FcitxKey_ISO_Left_Tab ||
+                currentSym == FcitxKey_Delete || currentSym == FcitxKey_Escape) {
+                keyEvent.forward();
+                return;
+            }
+
+            if (is_deleting_.load(std::memory_order_acquire)) {
+                if (isBackspace(currentSym)) {
+                    if (handleUInputKeyPress(keyEvent, currentSym, sleepTime)) {
                         return;
-                    return;
+                    }
+                } else {
+                    keyEvent.filterAndAccept();
                 }
+                return;
+            }
+
+            if (uinput_fd_ < 0) {
+                setup_uinput();
+            }
+
+            if (isBackspace(currentSym) || currentSym == FcitxKey_Return) {
+                if (isBackspace(currentSym)) {
+                    history_.push_back(static_cast<char>(0x07));
+                    replayBufferToEngine(history_);
+                    UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
+                    oldPreBuffer_ = (preeditC && preeditC.get()[0]) ? preeditC.get() : "";
+                } else {
+                    history_.clear();
+                    ResetEngine(vmkEngine_.handle());
+                    oldPreBuffer_.clear();
+                }
+                keyEvent.forward();
+                return;
+            }
+
+            std::string keyUtf8 = Key::keySymToUTF8(currentSym);
+            if (keyUtf8.empty()) {
+                keyEvent.forward();
+                return;
+            }
+
+            bool processed = EngineProcessKeyEvent(vmkEngine_.handle(), currentSym, keyEvent.rawKey().states());
+
+            auto commitF = UniqueCPtr<char>(EnginePullCommit(vmkEngine_.handle()));
+            if (commitF && commitF.get()[0]) {
+                std::string commitStr = commitF.get();
+                std::string commonPrefix, deletedPart, addedPart;
+                compareAndSplitStrings(oldPreBuffer_, commitStr, commonPrefix, deletedPart, addedPart);
+
+                if (!deletedPart.empty()) {
+                    performReplacement(deletedPart, addedPart);
+                } else if (!addedPart.empty()) {
+                    ic_->commitString(addedPart);
+                }
+
+                history_.clear();
+                ResetEngine(vmkEngine_.handle());
+                oldPreBuffer_.clear();
+
                 keyEvent.filterAndAccept();
                 return;
             }
-            if (!is_deleting_.load()) {
-                if (uinput_fd_ < 0)
-                    setup_uinput();
 
-                bool isNavigation = (currentSym >= FcitxKey_Home && currentSym <= FcitxKey_Begin) || (currentSym >= FcitxKey_Left && currentSym <= FcitxKey_Down) ||
-                    currentSym == FcitxKey_Tab || currentSym == FcitxKey_ISO_Left_Tab;
-
-                uint32_t shortcutMask =
-                    static_cast<uint32_t>(KeyState::Ctrl) | static_cast<uint32_t>(KeyState::Alt) | static_cast<uint32_t>(KeyState::Super) | static_cast<uint32_t>(KeyState::Hyper);
-
-                if (isNavigation || keyEvent.key().states() & shortcutMask) {
-                    keyEvent.forward();
-                    return;
-                }
-                bool processed = EngineProcessKeyEvent(vmkEngine_.handle(), currentSym, keyEvent.rawKey().states());
-
-                if (auto commitF = UniqueCPtr<char>(EnginePullCommit(vmkEngine_.handle())); commitF && commitF.get()[0]) {
-                    std::string commitStr = commitF.get();
-                    std::string commonPrefix, deletedPart, addedPart;
-                    compareAndSplitStrings(oldPreBuffer_, commitStr, commonPrefix, deletedPart, addedPart);
-
-                    if (!deletedPart.empty()) {
-                        performReplacement(deletedPart, addedPart);
-                    } else {
-                        if (!addedPart.empty()) {
-                            ic_->commitString(addedPart);
-                        }
-                    }
-
-                    history_.clear();
-                    ResetEngine(vmkEngine_.handle());
-                    oldPreBuffer_.clear();
-
-                    keyEvent.filterAndAccept();
-                    return;
-                }
-
-                if (!processed) {
-                    if (checkEmptyPreedit) {
-                        UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
-                        std::string      preeditStr = (preeditC && preeditC.get()[0]) ? preeditC.get() : "";
-                        if (preeditStr.empty()) {
-                            history_.clear();
-                            oldPreBuffer_.clear();
-                            keyEvent.forward();
-                        }
-                    }
-                    return;
-                }
-                if (currentSym >= 32 && currentSym <= 126) {
-                    history_ += static_cast<char>(currentSym);
-                } else {
-                    keyEvent.forward();
-                    return;
-                }
-                replayBufferToEngine(history_);
-                if (auto commitF = UniqueCPtr<char>(EnginePullCommit(vmkEngine_.handle())); commitF && commitF.get()[0]) {
-                    history_.clear();
-                    ResetEngine(vmkEngine_.handle());
-                    oldPreBuffer_.clear();
-                    return;
-                }
-                keyEvent.filterAndAccept();
-                UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
-                std::string      preeditStr = (preeditC && preeditC.get()[0]) ? preeditC.get() : "";
-                std::string      commonPrefix, deletedPart, addedPart;
-                if (compareAndSplitStrings(oldPreBuffer_, preeditStr, commonPrefix, deletedPart, addedPart)) {
-                    if (deletedPart.empty()) {
-                        if (!addedPart.empty()) {
-                            ic_->commitString(addedPart);
-                            oldPreBuffer_ = preeditStr;
-                        }
-                    } else {
-                        if (uinput_client_fd_ < 0) {
-                            std::string rawKey = keyEvent.key().toString();
-                            if (!rawKey.empty()) {
-                                ic_->commitString(rawKey);
-                            }
-                            return;
-                        }
-
-                        if (is_deleting_.load()) {
-                            is_deleting_.store(false);
-                        }
-                        performReplacement(deletedPart, addedPart);
-                        oldPreBuffer_ = preeditStr;
+            if (!processed) {
+                if (checkEmptyPreedit) {
+                    UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
+                    if (!preeditC || !preeditC.get()[0]) {
+                        history_.clear();
+                        oldPreBuffer_.clear();
+                        keyEvent.forward();
                     }
                 }
                 return;
+            }
+
+            history_ += keyUtf8;
+            replayBufferToEngine(history_);
+
+            auto commitAfterReplay = UniqueCPtr<char>(EnginePullCommit(vmkEngine_.handle()));
+            if (commitAfterReplay && commitAfterReplay.get()[0]) {
+                history_.clear();
+                ResetEngine(vmkEngine_.handle());
+                oldPreBuffer_.clear();
+                return;
+            }
+            keyEvent.filterAndAccept();
+            UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
+            std::string      preeditStr = (preeditC && preeditC.get()[0]) ? preeditC.get() : "";
+
+            std::string      commonPrefix, deletedPart, addedPart;
+            if (compareAndSplitStrings(oldPreBuffer_, preeditStr, commonPrefix, deletedPart, addedPart)) {
+                if (deletedPart.empty()) {
+                    if (!addedPart.empty()) {
+                        ic_->commitString(addedPart);
+                        oldPreBuffer_ = preeditStr;
+                    }
+                } else {
+                    if (uinput_client_fd_ < 0) {
+                        std::string rawKey = keyEvent.key().toString();
+                        if (!rawKey.empty()) {
+                            ic_->commitString(rawKey);
+                        }
+                        return;
+                    }
+
+                    if (is_deleting_.load()) {
+                        is_deleting_.store(false, std::memory_order_release);
+                    }
+
+                    performReplacement(deletedPart, addedPart);
+                    oldPreBuffer_ = preeditStr;
+                }
+            }
+        }
+
+        void handleSurroundingText(KeyEvent& keyEvent) {
+            auto ic = keyEvent.inputContext();
+            if (!ic)
+                return;
+            EngineProcessKeyEvent(vmkEngine_.handle(), keyEvent.rawKey().sym(), keyEvent.rawKey().states());
+            if (auto commitF = UniqueCPtr<char>(EnginePullCommit(vmkEngine_.handle())); commitF && commitF.get()[0]) {
+                if (!oldPreBuffer_.empty()) {
+                    DeletePreviousNChars(ic, utf8::length(oldPreBuffer_), engine_->instance());
+                }
+                ic->commitString(commitF.get());
+
+                ResetEngine(vmkEngine_.handle());
+                oldPreBuffer_.clear();
+                ic->inputPanel().reset();
+                ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+                keyEvent.filterAndAccept();
+                return;
+            }
+            UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
+            std::string      preeditStr = (preeditC && preeditC.get()[0]) ? preeditC.get() : "";
+            if (preeditStr != oldPreBuffer_) {
+                keyEvent.filterAndAccept();
+                if (!oldPreBuffer_.empty()) {
+                    DeletePreviousNChars(ic, utf8::length(oldPreBuffer_), engine_->instance());
+                }
+                if (!preeditStr.empty()) {
+                    ic->commitString(preeditStr);
+                    oldPreBuffer_ = preeditStr;
+                } else
+                    oldPreBuffer_.clear();
             }
         }
 
@@ -722,12 +777,12 @@ namespace fcitx {
             if (uinput_client_fd_ < 0) {
                 connect_uinput_server();
             }
-            if (current_backspace_count_ >= (int)expected_backspaces_ && is_deleting_.load()) {
+            if (current_backspace_count_ >= expected_backspaces_ && is_deleting_.load()) {
                 is_deleting_.store(false);
                 current_backspace_count_ = -1;
                 expected_backspaces_     = 0;
             }
-            if (needEngineReset.load() && (realMode == fcitx::VMKMode::VMK1 || realMode == fcitx::VMKMode::VMK2 || realMode == fcitx::VMKMode::VMK1HC)) {
+            if (needEngineReset.load() && (realMode == VMKMode::VMK1 || realMode == VMKMode::VMK2 || realMode == VMKMode::VMK1HC || realMode == VMKMode::VMKSmooth)) {
                 oldPreBuffer_.clear();
                 history_.clear();
                 ResetEngine(vmkEngine_.handle());
@@ -737,56 +792,31 @@ namespace fcitx {
             }
             if (keyEvent.rawKey().check(FcitxKey_Shift_L) || keyEvent.rawKey().check(FcitxKey_Shift_R))
                 return;
-            const fcitx::KeySym currentSym = keyEvent.rawKey().sym();
+            const KeySym currentSym = keyEvent.rawKey().sym();
 
             switch (realMode) {
-                case fcitx::VMKMode::VMK1: {
-                    handleUinputMode(keyEvent, currentSym, true);
+                case VMKMode::VMK1: {
+                    handleUinputMode(keyEvent, currentSym, true, 20);
                     break;
                 }
-                case fcitx::VMKMode::VMK1HC: {
-                    handleUinputMode(keyEvent, currentSym, false);
+                case VMKMode::VMK1HC: {
+                    handleUinputMode(keyEvent, currentSym, false, 20);
                     break;
                 }
-                case fcitx::VMKMode::VMK2: {
-                    auto ic = keyEvent.inputContext();
-                    if (!ic)
-                        return;
-                    EngineProcessKeyEvent(vmkEngine_.handle(), keyEvent.rawKey().sym(), keyEvent.rawKey().states());
-                    if (auto commitF = UniqueCPtr<char>(EnginePullCommit(vmkEngine_.handle())); commitF && commitF.get()[0]) {
-                        if (!oldPreBuffer_.empty()) {
-                            DeletePreviousNChars(ic, fcitx::utf8::length(oldPreBuffer_), engine_->instance());
-                        }
-                        ic->commitString(commitF.get());
-
-                        ResetEngine(vmkEngine_.handle());
-                        oldPreBuffer_.clear();
-                        ic->inputPanel().reset();
-                        ic->updateUserInterface(UserInterfaceComponent::InputPanel);
-                        keyEvent.filterAndAccept();
-                        return;
-                    }
-                    UniqueCPtr<char> preeditC(EnginePullPreedit(vmkEngine_.handle()));
-                    std::string      preeditStr = (preeditC && preeditC.get()[0]) ? preeditC.get() : "";
-                    if (preeditStr != oldPreBuffer_) {
-                        keyEvent.filterAndAccept();
-                        if (!oldPreBuffer_.empty()) {
-                            DeletePreviousNChars(ic, fcitx::utf8::length(oldPreBuffer_), engine_->instance());
-                        }
-                        if (!preeditStr.empty()) {
-                            ic->commitString(preeditStr);
-                            oldPreBuffer_ = preeditStr;
-                        } else
-                            oldPreBuffer_.clear();
-                    }
+                case VMKMode::VMK2: {
+                    handleSurroundingText(keyEvent);
                     break;
                 }
-                case fcitx::VMKMode::Preedit: {
+                case VMKMode::Preedit: {
                     handlePreeditMode(keyEvent);
                     break;
                 }
-                case fcitx::VMKMode::Emoji: {
+                case VMKMode::Emoji: {
                     handleEmojiMode(keyEvent);
+                    break;
+                }
+                case VMKMode::VMKSmooth: {
+                    handleUinputMode(keyEvent, currentSym, true, 5);
                     break;
                 }
                 default: {
@@ -796,23 +826,27 @@ namespace fcitx {
         }
 
         void reset() {
+            if (is_deleting_.load(std::memory_order_acquire)) {
+                return;
+            }
             is_deleting_.store(false);
             clearAllBuffers();
 
             switch (realMode) {
-                case fcitx::VMKMode::Preedit: {
+                case VMKMode::Preedit: {
                     ic_->inputPanel().reset();
                     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
                     ic_->updatePreedit();
                     break;
                 }
-                case fcitx::VMKMode::VMK2:
-                case fcitx::VMKMode::VMK1:
-                case fcitx::VMKMode::VMK1HC: {
+                case VMKMode::VMK2:
+                case VMKMode::VMK1:
+                case VMKMode::VMK1HC:
+                case VMKMode::VMKSmooth: {
                     ic_->inputPanel().reset();
                     break;
                 }
-                case fcitx::VMKMode::Emoji: {
+                case VMKMode::Emoji: {
                     emojiBuffer_.clear();
                     emojiCandidates_.clear();
                     ic_->inputPanel().reset();
@@ -828,7 +862,7 @@ namespace fcitx {
 
         void commitBuffer() {
             switch (realMode) {
-                case fcitx::VMKMode::Preedit: {
+                case VMKMode::Preedit: {
                     ic_->inputPanel().reset();
                     if (vmkEngine_) {
                         EngineCommitPreedit(vmkEngine_.handle());
@@ -840,7 +874,7 @@ namespace fcitx {
                     ic_->updatePreedit();
                     break;
                 }
-                case fcitx::VMKMode::VMK2: {
+                case VMKMode::VMK2: {
                     if (vmkEngine_)
                         ResetEngine(vmkEngine_.handle());
                     break;
@@ -853,15 +887,20 @@ namespace fcitx {
 
         void clearAllBuffers() {
             oldPreBuffer_.clear();
-            expected_backspaces_     = 0;
-            current_backspace_count_ = 0;
-            pending_commit_string_.clear();
-            current_thread_id_.store(0);
             history_.clear();
+            if (!is_deleting_.load(std::memory_order_acquire)) {
+                expected_backspaces_     = 0;
+                current_backspace_count_ = 0;
+                pending_commit_string_.clear();
+            }
             emojiBuffer_.clear();
             emojiCandidates_.clear();
             if (vmkEngine_)
                 ResetEngine(vmkEngine_.handle());
+        }
+
+        bool isEmptyHistory() {
+            return history_.empty();
         }
 
       private:
@@ -871,6 +910,7 @@ namespace fcitx {
             EmojiCandidateWord(Text text, VMKState* state, const std::string& emojiOutput) : CandidateWord(std::move(text)), state_(state), emojiOutput_(emojiOutput) {}
 
             void select(InputContext* inputContext) const override {
+                FCITX_UNUSED(inputContext);
                 state_->ic_->commitString(emojiOutput_);
 
                 state_->emojiBuffer_.clear();
@@ -985,7 +1025,7 @@ namespace fcitx {
         modeMenu_ = std::make_unique<Menu>();
         modeAction_->setMenu(modeMenu_.get());
 
-        std::vector<fcitx::VMKMode> modes = {fcitx::VMKMode::VMK1, fcitx::VMKMode::VMK2, fcitx::VMKMode::Preedit, fcitx::VMKMode::VMK1HC};
+        std::vector<VMKMode> modes = {VMKMode::VMKSmooth, VMKMode::VMK1, VMKMode::VMK2, VMKMode::Preedit, VMKMode::VMK1HC};
         for (const auto& mode : modes) {
             auto action = std::make_unique<SimpleAction>();
             action->setShortText(modeEnumToString(mode));
@@ -1003,7 +1043,7 @@ namespace fcitx {
                 reloadConfig();
                 updateModeAction(ic);
                 if (ic) {
-                    ic->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
+                    ic->updateUserInterface(UserInterfaceComponent::StatusArea);
                 }
             }));
             modeMenu_->addAction(action.get());
@@ -1031,7 +1071,7 @@ namespace fcitx {
                 refreshEngine();
                 updateInputMethodAction(ic);
                 if (ic)
-                    ic->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
+                    ic->updateUserInterface(UserInterfaceComponent::StatusArea);
             }));
             inputMethodMenu_->addAction(action);
         }
@@ -1058,7 +1098,7 @@ namespace fcitx {
                 refreshEngine();
                 updateCharsetAction(ic);
                 if (ic)
-                    ic->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
+                    ic->updateUserInterface(UserInterfaceComponent::StatusArea);
             }));
             charsetMenu_->addAction(action);
         }
@@ -1207,23 +1247,24 @@ namespace fcitx {
         }
     }
 
-    std::string vmkEngine::subMode(const fcitx::InputMethodEntry&, fcitx::InputContext&) {
+    std::string vmkEngine::subMode(const InputMethodEntry&, InputContext&) {
         return *config_.inputMethod;
     }
 
     void vmkEngine::activate(const InputMethodEntry& entry, InputContextEvent& event) {
+        FCITX_UNUSED(entry);
         auto                     ic = event.inputContext();
         static std::atomic<bool> mouseThreadStarted{false};
         if (!mouseThreadStarted.exchange(true))
             startMouseReset();
 
         auto& statusArea = event.inputContext()->statusArea();
-        if (ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit))
+        if (ic->capabilityFlags().test(CapabilityFlag::Preedit))
             instance_->inputContextManager().setPreeditEnabledByDefault(true);
 
         // ibus-bamboo mode save/load
-        std::string    appName = ic->program();
-        fcitx::VMKMode targetMode;
+        std::string appName = ic->program();
+        VMKMode     targetMode;
 
         if (!appRules_.empty() && appRules_.count(appName)) {
             targetMode = appRules_[appName];
@@ -1258,6 +1299,7 @@ namespace fcitx {
     }
 
     void vmkEngine::keyEvent(const InputMethodEntry& entry, KeyEvent& keyEvent) {
+        FCITX_UNUSED(entry);
         auto ic = keyEvent.inputContext();
 
         // Check if mouse was clicked to close app mode menu
@@ -1275,43 +1317,69 @@ namespace fcitx {
                 return;
 
             keyEvent.filterAndAccept();
-            fcitx::VMKMode selectedMode  = fcitx::VMKMode::NoMode;
-            bool           selectionMade = false;
+            VMKMode selectedMode  = VMKMode::NoMode;
+            bool    selectionMade = false;
+
+            KeySym  keySym = keyEvent.key().sym();
 
             // map number key to mode
-            if (keyEvent.key().check(FcitxKey_1))
-                selectedMode = fcitx::VMKMode::VMK1;
-            else if (keyEvent.key().check(FcitxKey_2))
-                selectedMode = fcitx::VMKMode::VMK2;
-            else if (keyEvent.key().check(FcitxKey_3))
-                selectedMode = fcitx::VMKMode::Preedit;
-            else if (keyEvent.key().check(FcitxKey_4))
-                selectedMode = fcitx::VMKMode::VMK1HC;
-            else if (keyEvent.key().check(FcitxKey_5))
-                selectedMode = fcitx::VMKMode::Off;
-            else if (keyEvent.key().check(FcitxKey_6)) {
-                if (appRules_.count(currentConfigureApp_)) {
-                    appRules_.erase(currentConfigureApp_);
-                    saveAppRules();
+            switch (keySym) {
+                case FcitxKey_1: {
+                    selectedMode = VMKMode::VMKSmooth;
+                    break;
                 }
-                selectionMade = true;
-            } else if (keyEvent.key().check(FcitxKey_7)) {
-                selectedMode  = fcitx::VMKMode::Emoji;
-                selectionMade = true;
-            } else if (keyEvent.key().check(FcitxKey_Escape)) {
-                selectionMade = true;
-            } else if (keyEvent.key().check(FcitxKey_grave)) {
-                isSelectingAppMode_ = false;
-                ic->inputPanel().reset();
-                ic->updateUserInterface(UserInterfaceComponent::InputPanel);
-                auto state = ic->propertyFor(&factory_);
-                state->reset();
-                ic->commitString("`");
-                return;
+                case FcitxKey_2: {
+                    selectedMode = VMKMode::VMK1;
+                    break;
+                }
+                case FcitxKey_3: {
+                    selectedMode = VMKMode::VMK1HC;
+                    break;
+                }
+                case FcitxKey_4: {
+                    selectedMode = VMKMode::VMK2;
+                    break;
+                }
+                case FcitxKey_5: {
+                    selectedMode = VMKMode::Preedit;
+                    break;
+                }
+                case FcitxKey_6: {
+                    selectedMode = VMKMode::Emoji;
+                    break;
+                }
+                case FcitxKey_7: {
+                    selectedMode = VMKMode::Off;
+                    break;
+                }
+                case FcitxKey_8: {
+                    if (appRules_.count(currentConfigureApp_)) {
+                        appRules_.erase(currentConfigureApp_);
+                        saveAppRules();
+                    }
+                    selectionMade = true;
+                    break;
+                }
+                case FcitxKey_Escape: {
+                    selectionMade = true;
+                    break;
+                }
+                case FcitxKey_grave: {
+                    isSelectingAppMode_ = false;
+                    ic->inputPanel().reset();
+                    ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+                    auto state = ic->propertyFor(&factory_);
+                    state->reset();
+                    Key key(FcitxKey_grave);
+                    ic->forwardKey(key, false);
+                    ic->forwardKey(key, true);
+                    return;
+                }
+                default: break;
             }
 
-            if (selectedMode != fcitx::VMKMode::NoMode) {
-                if (selectedMode != fcitx::VMKMode::Emoji) {
+            if (selectedMode != VMKMode::NoMode) {
+                if (selectedMode != VMKMode::Emoji) {
                     appRules_[currentConfigureApp_] = selectedMode;
                     saveAppRules();
                 }
@@ -1345,13 +1413,19 @@ namespace fcitx {
     }
 
     void vmkEngine::reset(const InputMethodEntry& entry, InputContextEvent& event) {
+        FCITX_UNUSED(entry);
         auto state = event.inputContext()->propertyFor(&factory_);
+        if (!state->isEmptyHistory() && event.type() != EventType::InputContextFocusOut) {
+            return;
+        }
+
         state->reset();
     }
 
     void vmkEngine::deactivate(const InputMethodEntry& entry, InputContextEvent& event) {
+        FCITX_UNUSED(entry);
         auto state = event.inputContext()->propertyFor(&factory_);
-        if (realMode == fcitx::VMKMode::Preedit) {
+        if (realMode == VMKMode::Preedit) {
             if (event.type() != EventType::InputContextFocusOut)
                 state->commitBuffer();
             else
@@ -1392,7 +1466,7 @@ namespace fcitx {
 
     void vmkEngine::updateModeAction(InputContext* ic) {
         std::string currentModeStr = config_.mode.value();
-        realMode                   = fcitx::modeStringToEnum(currentModeStr);
+        realMode                   = modeStringToEnum(currentModeStr);
         globalMode_                = realMode;
 
         for (const auto& action : modeSubAction_) {
@@ -1490,7 +1564,7 @@ namespace fcitx {
             if (delimiterPos != std::string::npos) {
                 std::string app     = line.substr(0, delimiterPos);
                 std::string modeStr = line.substr(delimiterPos + 1);
-                appRules_[app]      = fcitx::modeStringToEnum(modeStr);
+                appRules_[app]      = modeStringToEnum(modeStr);
             }
         }
         file.close();
@@ -1503,7 +1577,7 @@ namespace fcitx {
 
         file << "# VMK Per-App Configuration\n";
         for (const auto& pair : appRules_) {
-            std::string modeStr = fcitx::modeEnumToString(pair.second);
+            std::string modeStr = modeEnumToString(pair.second);
             file << pair.first << "=" << modeStr << "\n";
         }
         file.close();
@@ -1522,14 +1596,14 @@ namespace fcitx {
         candidateList->setLayoutHint(CandidateLayoutHint::Vertical);
         candidateList->setPageSize(10);
 
-        fcitx::VMKMode currentAppRules = fcitx::VMKMode::Off;
+        VMKMode currentAppRules = VMKMode::Off;
         if (appRules_.count(currentConfigureApp_)) {
             currentAppRules = appRules_[currentConfigureApp_];
         } else {
             currentAppRules = globalMode_;
         }
 
-        auto getLabel = [&](const fcitx::VMKMode& modeName, const std::string& modeLabel) {
+        auto getLabel = [&](const VMKMode& modeName, const std::string& modeLabel) {
             if (modeName == currentAppRules) {
                 return Text(modeLabel + _(" (Default)"));
             } else {
@@ -1538,13 +1612,14 @@ namespace fcitx {
         };
 
         candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text(_("App name detected by fcitx5: ") + currentConfigureApp_)));
-        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(fcitx::VMKMode::VMK1, _("1. Fake backspace by Uinput"))));
-        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(fcitx::VMKMode::VMK2, _("2. Surrounding Text"))));
-        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(fcitx::VMKMode::Preedit, _("3. Preedit"))));
-        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(fcitx::VMKMode::VMK1HC, _("4. Fake backspace by Uinput for wine apps"))));
-        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(fcitx::VMKMode::Off, "5. OFF - Disable Input Method")));
-        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text(_("6. Remove app settings"))));
-        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text(_("7. Emoji mode"))));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(VMKMode::VMKSmooth, _("1. Fake backspace by Uinput (smooth)"))));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(VMKMode::VMK1, _("2. Fake backspace by Uinput"))));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(VMKMode::VMK1HC, _("3. Fake backspace by Uinput for wine apps"))));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(VMKMode::VMK2, _("4. Surrounding Text"))));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(VMKMode::Preedit, _("5. Preedit"))));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text(_("6. Emoji mode"))));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(getLabel(VMKMode::Off, "7. OFF - Disable Input Method")));
+        candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text(_("8. Remove app settings"))));
         candidateList->append(std::make_unique<DisplayOnlyCandidateWord>(Text(_("`. Close menu and type `"))));
 
         ic->inputPanel().reset();
