@@ -122,6 +122,8 @@ Truy cập trang [Open Build Service](https://software.opensuse.org//download.ht
 [![build result](https://build.opensuse.org/projects/home:iamnanoka/packages/fcitx5-vmk/badge.svg?type=percent)](https://build.opensuse.org/package/show/home:iamnanoka/fcitx5-vmk)
 [![build result](https://build.opensuse.org/projects/home:iamnanoka/packages/fcitx5-vmk/badge.svg?type=default)](https://build.opensuse.org/package/show/home:iamnanoka/fcitx5-vmk)
 
+Hoặc có thể xem cách cài của từng distro [tại đây](INSTALL.md).
+
 > Lưu ý: Arch và Arch-based distro cũng có thể dùng cách cài này.
 
 #### Cách 2: Biên dịch từ mã nguồn (Build from source)
@@ -151,7 +153,7 @@ git clone https://github.com/nhktmdzhg/VMK.git
 cd VMK
 
 # Biên dịch
-cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=/usr/lib . # Tùy vào máy mà LIBDIR sẽ khác nhau
+cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=/usr/lib . # Tùy vào distro mà LIBDIR sẽ khác nhau
 make
 
 # Cài đặt (cần quyền root)
@@ -274,12 +276,14 @@ Khi đang ở trong bất kỳ ứng dụng nào, nhấn phím:
 ` (Phím dấu huyền)
 ```
 
-Menu sẽ hiện ra cho phép bạn chọn số từ 1-6 và `` ` ``:
+Menu sẽ hiện ra cho phép bạn chọn số từ 1-7 và `` ` ``:
 
-- **Mode 1 (Uinput):** Chế độ mặc định, tương thích tốt nhất (dùng server gửi phím xóa).
-- **Mode 2 (Surrounding Text):** Dùng cơ chế surrounding text của ứng dụng, hoạt động rất tốt trên các app qt và gtk, hoặc các app tự implement surrounding text (khá bất ngờ là neovide, một app frontend cho neovim lại dùng mode này cực ổn).
-- **Mode 3 (Preedit):** Hiện gạch chân, tương thích cao nhưng không tự nhiên bằng Mode 1.
-- **Mode 4 (Hardcore):** Tốc độ cao nhất.
+- **Mode 1 (Uinput smooth):** Chế độ mặc định, tương thích tốt (dùng server gửi phím xóa), rất mượt, nhưng nếu gặp các app xử lý kém (như libreoffice) thì tạch, đó là lý do phải có mode 2.
+- **Mode 2 (Uinput):** Cũng như mode 1 nhưng xóa và gửi phím chậm hơn, dùng cho các app có tốc độ xử lý khá chậm.
+- **Mode 3 (Uinput hardcore):** Cũng là mode 1 nhưng độ tương thích khá chấm hỏi, chỉ khuyến khích nếu dùng wine, các app native nên dùng mode 1 hoặc mode 2.
+- **Mode 4 (Surrounding Text):** Dùng cơ chế surrounding text của ứng dụng, hoạt động rất tốt trên các app qt và gtk, hoặc các app tự implement surrounding text (khá bất ngờ là neovide, một app frontend cho neovim lại dùng mode này cực ổn).
+- **Mode 5 (Preedit):** Hiện gạch chân, tương thích cao nhưng không tự nhiên bằng Mode 1, 2.
+- **Emoji mode:** Chuyển sang chế độ gõ emoji, nguồn emoji từ EmojiOne, search emoji bằng thuật toàn fuzzy search tiện lợi, có thể tra cứu tại bảng [sau](data/emoji/EMOJI_GUIDE.md).
 - **OFF:** Tắt bộ gõ cho ứng dụng này.
 - **Xóa thiết lập cho app:** Quay về dùng cấu hình mặc định.
 - **Tắt menu và gõ phím `:** Thoát menu và in ký tự dấu huyền.

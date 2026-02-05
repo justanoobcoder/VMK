@@ -40,12 +40,13 @@ jobs:
           golang \
           hicolor-icon-theme \
           pkg-config \
-          libx11-dev \
-          gettext
+          gettext \
+          libx11-dev
 
     - name: Create tarball structure
       run: |
         mkdir -p dist
+        export LDFLAGS="-Wl,-z,relro -Wl,-z,now $LDFLAGS"
         cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=/usr/lib .
         make -j$(nproc)
         make install DESTDIR=$(pwd)/dist
