@@ -595,27 +595,12 @@ namespace fcitx {
             int my_id                = ++current_thread_id_;
             current_backspace_count_ = 0;
             pending_commit_string_   = addedPart;
-
-            int extraBackspace = 0;
-
-            if (isAutofillCertain(ic_->surroundingText()))
-                extraBackspace = 1;
-            else
-                extraBackspace = 0;
-
-            expected_backspaces_ = utf8::length(deletedPart) + 1 + extraBackspace;
-
-            if (expected_backspaces_ > 0) {
-                replacement_thread_id_.store(my_id, std::memory_order_release);
-                replacement_start_ms_.store(now_ms(), std::memory_order_release);
-                is_deleting_.store(true, std::memory_order_release);
-                monitor_cv.notify_one();
-                send_backspace_uinput(expected_backspaces_);
-            } else {
-                if (!addedPart.empty()) {
-                    ic_->commitString(addedPart);
-                }
-            }
+            expected_backspaces_     = utf8::length(deletedPart) + 1 + (isAutofillCertain(ic_->surroundingText()) ? 1 : 0);
+            replacement_thread_id_.store(my_id, std::memory_order_release);
+            replacement_start_ms_.store(now_ms(), std::memory_order_release);
+            is_deleting_.store(true, std::memory_order_release);
+            monitor_cv.notify_one();
+            send_backspace_uinput(expected_backspaces_);
         }
 
         void checkForwardSpecialKey(KeyEvent& keyEvent, KeySym& currentSym) {
